@@ -1,0 +1,20 @@
+[Unit]
+Description=ROS2 Supervisor node
+After=network.target
+
+[Service]
+# Running as your user ensures ROS 2 has full access to 
+# its configuration paths and avoids permission-denied crashes.
+User=REPLACE_ME_USER
+Group=REPLACE_ME_USER
+WorkingDirectory=REPLACE_ME_WORKSPACE
+
+# Using 'exec' ensures the Python process becomes the main PID
+# which prevents systemd from losing track of the service.
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source REPLACE_ME_WORKSPACE/install/setup.bash && exec /usr/bin/python3 /opt/ros/humble/bin/ros2 run corebot_manager supervisor_node"
+
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

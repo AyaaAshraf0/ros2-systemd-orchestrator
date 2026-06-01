@@ -1,0 +1,38 @@
+[Unit]
+Description=CoreBot Autonomous Navigation Stack
+# If SLAM is running, automatically shut it down
+Conflicts=corebot_slam.service
+# Order execution sequence only
+After=corebot_hardware.service
+# If the hardware layer is stopped manually later, tear down navigation too
+PartOf=corebot_hardware.service
+
+[Service]
+Type=simple
+# Using your established working user configuration
+User=REPLACE_ME_USER
+Group=REPLACE_ME_USER
+WorkingDirectory=REPLACE_ME_WORKSPACE
+
+# --- THE BRUTAL SAFETY LOCKOUT ---
+# Ensures Hardware is active before attempting to launch
+ExecStartPre=/bin/bash -c "if ! systemctl is-active --quiet corebot_hardware.service; then echo 'ERROR: Cannot start Navigation because CoreBot Hardware Layer is offline!'; exit 1; fi"
+
+Environment="PYTHONUNBUFFERED=1"
+
+# The Launch Command
+# Added 'exec' so systemd tracks the ROS2 process directly, preventing 'vanished' errors
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source REPLACE_ME_WORKSPACE/install/setup.bash && exec ros2 launch navigation navigation_bringup.launch.py"
+
+# --- AGGRESSIVE PROCESS MANAGEMENT ---
+KillMode=control-group
+TimeoutStopSec=5
+# Clean up fallback hook
+ExecStopPost=/bin/bash -c "pkill -f lifecycle_manager_navigation || true"
+
+# Do not restart if the safety lockout tripped it
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

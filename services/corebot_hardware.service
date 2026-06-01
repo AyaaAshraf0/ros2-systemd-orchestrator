@@ -1,0 +1,24 @@
+[Unit]
+Description=CoreBot Hardware Layer
+Before=corebot_slam.service corebot_nav.service
+
+[Service]
+# Using your established working user configuration
+User=REPLACE_ME_USER
+Group=REPLACE_ME_USER
+WorkingDirectory=REPLACE_ME_WORKSPACE
+
+# Environment variables for hardware/graphics
+Environment="PYTHONUNBUFFERED=1"
+Environment="DISPLAY=:0"
+
+# The Launch Command
+# Using 'exec' ensures the PID is tracked correctly, preventing 'vanished' errors
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source REPLACE_ME_WORKSPACE/install/setup.bash && exec ros2 launch cyber_robot ign.launch.py"
+
+Restart=on-failure
+RestartSec=2
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

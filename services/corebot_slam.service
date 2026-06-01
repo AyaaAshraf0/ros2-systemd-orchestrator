@@ -1,0 +1,31 @@
+[Unit]
+Description=CoreBot SLAM Mapping Stack
+Conflicts=corebot_nav.service
+After=corebot_hardware.service
+
+[Service]
+Type=simple
+User=REPLACE_ME_USER
+Group=REPLACE_ME_USER
+WorkingDirectory=REPLACE_ME_WORKSPACE
+
+Environment="PYTHONUNBUFFERED=1"
+
+# The exact launch command you had
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source REPLACE_ME_WORKSPACE/install/setup.bash && exec ros2 launch navigation slam_with_map_save.launch.py"
+
+# --- THIS IS WHAT MAKES IT WORK ---
+# Force systemd to send Ctrl+C (SIGINT) so your original Python code catches it cleanly
+KillSignal=SIGINT
+
+# Give it 20 seconds to write the map before killing it
+TimeoutStopSec=20
+
+# Protect the child processes (map_saver) while they write to disk
+KillMode=mixed
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

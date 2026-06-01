@@ -1,0 +1,17 @@
+[Unit]
+Description=Robot Master Communications Bridge (Rosbridge)
+After=network.target
+
+[Service]
+User=REPLACE_ME_USER
+Group=REPLACE_ME_USER
+WorkingDirectory=REPLACE_ME_WORKSPACE
+
+# Explicitly invoke bash to source the ROS2 environment and the workspace
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source REPLACE_ME_WORKSPACE/install/setup.bash && exec ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
