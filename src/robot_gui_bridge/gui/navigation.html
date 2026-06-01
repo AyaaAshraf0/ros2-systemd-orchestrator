@@ -795,6 +795,13 @@
         // ═══════════════════════════════════════════════
         function callSupervisor(endpoint, mode) {
             if (!ros || ros.readyState !== WebSocket.OPEN) { log('Not connected', 'error'); return; }
+            
+            // Cancel any active navigation goals and force the robot to stop moving
+            if (endpoint === 'mode' && (mode === 'slam' || mode === 'idle')) {
+                if (typeof cancelGoal === 'function') cancelGoal();
+                if (typeof teleStop === 'function') teleStop(true);
+            }
+
             const svcMap = {
                 toggle: '/corebot/robot_turn_on_off',
                 mode:   '/corebot/set_mode'
@@ -807,8 +814,16 @@
                 type: 'corebot_interfaces/srv/SetMode',
                 args: { mode: mode }
             };
-            console.debug('[svc_call]', JSON.stringify(_svcFrame));
-            send(_svcFrame);
+
+            // Give the cancel/stop messages 300ms to transit rosbridge
+            // before systemd brutally kills the navigation process.
+            const delayMs = (endpoint === 'mode' && (mode === 'slam' || mode === 'idle')) ? 300 : 0;
+
+            setTimeout(() => {
+                console.debug('[svc_call]', JSON.stringify(_svcFrame));
+                send(_svcFrame);
+            }, delayMs);
+
             pendingCalls[callId] = (resp) => {
                 const rawStr = JSON.stringify(resp);
                 const ok = resp.success ?? false;
