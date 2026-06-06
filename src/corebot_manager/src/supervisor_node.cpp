@@ -4,9 +4,13 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <algorithm>
+#include <thread>
+#include <atomic>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "corebot_interfaces/srv/set_mode.hpp"
+#include "corebot_interfaces/action/set_mode.hpp"
 
 class RobotSupervisor : public rclcpp::Node {
 public:
@@ -18,10 +22,34 @@ public:
             std::bind(&RobotSupervisor::handle_toggle_robot, this, std::placeholders::_1, std::placeholders::_2)
         );
 
-        // Endpoint 2: Autonomy Modes
-        mode_srv_ = this->create_service<corebot_interfaces::srv::SetMode>(
+        // Endpoint 2: Autonomy Modes (action server)
+        using SetModeAction = corebot_interfaces::action::SetMode;
+
+        action_server_ = rclcpp_action::create_server<SetModeAction>(
+            this,
             "/corebot/set_mode",
-            std::bind(&RobotSupervisor::handle_set_mode, this, std::placeholders::_1, std::placeholders::_2)
+            // goal callback
+            [this](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const SetModeAction::Goal> goal) {
+                (void)uuid;
+                std::string mode = goal->mode;
+                std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
+                if (transitioning_.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Transition request rejected: another transition is in progress.");
+                    return rclcpp_action::GoalResponse::REJECT;
+                }
+                transitioning_.store(true);
+                return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+            },
+            // cancel callback
+            [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<SetModeAction>> goal_handle) {
+                (void)goal_handle;
+                RCLCPP_WARN(this->get_logger(), "Cancel requested but transitions are not cancellable — rejecting.");
+                return rclcpp_action::CancelResponse::REJECT;
+            },
+            // accepted callback
+            [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<SetModeAction>> goal_handle) {
+                std::thread{std::bind(&RobotSupervisor::execute, this, std::placeholders::_1), goal_handle}.detach();
+            }
         );
 
         RCLCPP_INFO(this->get_logger(), "ROS 2 C++ Supervisor Active: Unified Interface Mode.");
@@ -86,62 +114,72 @@ private:
             response->message = "Invalid input. Use 'on' or 'off'.";
         }
     }
-
-    void handle_set_mode(
-        const std::shared_ptr<corebot_interfaces::srv::SetMode::Request> request,
-        std::shared_ptr<corebot_interfaces::srv::SetMode::Response> response)
+    void execute(std::shared_ptr<rclcpp_action::ServerGoalHandle<corebot_interfaces::action::SetMode>> goal_handle)
     {
-        std::string target = request->mode;
-        std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+        using SetModeAction = corebot_interfaces::action::SetMode;
+        auto goal = goal_handle->get_goal();
+        std::string mode = goal->mode;
+        std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
 
-        if (target == "slam") {
-            // FIX 2: Explicitly stop Nav and WAIT for it to fully die before
-            // starting SLAM. Without this, systemd's async Conflicts= can leave
-            // Nav still running when SLAM tries to start, causing SLAM to fail.
-            RCLCPP_INFO(this->get_logger(), "Stopping Nav before starting SLAM...");
-            call_systemctl("stop", "corebot_nav.service"); // blocks until nav is dead
+        auto feedback = std::make_shared<SetModeAction::Feedback>();
+        auto result = std::make_shared<SetModeAction::Result>();
 
-            response->success = call_systemctl("start", "corebot_slam.service");
-            response->message = response->success
-                ? "SLAM mode active."
-                : "SLAM START failed — check journalctl for details.";
+        if (mode == "slam") {
+            feedback->status = "Stopping Nav before starting SLAM...";
+            goal_handle->publish_feedback(feedback);
+            bool ok1 = call_systemctl("stop", "corebot_nav.service");
+
+            feedback->status = "Starting SLAM...";
+            goal_handle->publish_feedback(feedback);
+            bool ok2 = call_systemctl("start", "corebot_slam.service");
+
+            result->success = ok1 && ok2;
+            result->message = result->success ? "SLAM mode active." : "SLAM transition failed — check journalctl.";
+            if (result->success) goal_handle->succeed(result); else goal_handle->abort(result);
         }
-        else if (target == "nav") {
-            // FIX 2 (mirror): Stop SLAM and wait before starting Nav.
-            // SLAM's KillSignal=SIGINT + TimeoutStopSec=20 means it can take up
-            // to 20s to save the map — this call will block for that full duration,
-            // which is correct: we must not start Nav until the map is saved.
-            RCLCPP_INFO(this->get_logger(), "Stopping SLAM before starting Nav (map save in progress)...");
-            call_systemctl("stop", "corebot_slam.service"); // blocks, may take up to 20s
+        else if (mode == "nav") {
+            feedback->status = "Stopping SLAM (map save in progress, up to 20s)...";
+            goal_handle->publish_feedback(feedback);
+            bool ok1 = call_systemctl("stop", "corebot_slam.service");
 
-            response->success = call_systemctl("start", "corebot_nav.service");
-            response->message = response->success
-                ? "Navigation mode active."
-                : "Nav START failed — check journalctl for details.";
+            feedback->status = "SLAM stopped. Starting Nav...";
+            goal_handle->publish_feedback(feedback);
+            bool ok2 = call_systemctl("start", "corebot_nav.service");
+
+            result->success = ok1 && ok2;
+            result->message = result->success ? "Navigation mode active." : "Nav transition failed — check journalctl.";
+            if (result->success) goal_handle->succeed(result); else goal_handle->abort(result);
         }
-        else if (target == "idle") {
-            // Stop both and report combined success.
+        else if (mode == "idle") {
+            feedback->status = "Stopping SLAM and Nav...";
+            goal_handle->publish_feedback(feedback);
             bool s1 = call_systemctl("stop", "corebot_slam.service");
             bool s2 = call_systemctl("stop", "corebot_nav.service");
-            response->success = s1 && s2;
-            response->message = response->success
-                ? "System IDLE."
-                : "IDLE transition had errors — check journalctl for details.";
+            result->success = s1 && s2;
+            result->message = result->success ? "System IDLE." : "IDLE transition had errors — check journalctl.";
+            if (result->success) goal_handle->succeed(result); else goal_handle->abort(result);
         }
         else {
-            response->success = false;
-            response->message = "Invalid mode. Use 'slam', 'nav', or 'idle'.";
+            result->success = false;
+            result->message = "Invalid mode. Use slam, nav, or idle.";
+            goal_handle->abort(result);
         }
+
+        transitioning_.store(false);
     }
 
     rclcpp::Service<corebot_interfaces::srv::SetMode>::SharedPtr toggle_srv_;
-    rclcpp::Service<corebot_interfaces::srv::SetMode>::SharedPtr mode_srv_;
+    rclcpp_action::Server<corebot_interfaces::action::SetMode>::SharedPtr action_server_;
+    std::atomic<bool> transitioning_{false};
 };
 
 int main(int argc, char* argv[]) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<RobotSupervisor>();
-    rclcpp::spin(node);
+    rclcpp::executors::SingleThreadedExecutor exec;
+    exec.add_node(node);
+    exec.spin();
+    exec.remove_node(node);
     rclcpp::shutdown();
     return 0;
 }

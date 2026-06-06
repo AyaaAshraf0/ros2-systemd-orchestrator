@@ -903,7 +903,7 @@
                 </div>
                 <div class="field" style="margin-top:8px">
                     <label>cmd_vel Topic</label>
-                    <input type="text" id="cmdVelTopic" value="/cmd_vel">
+                    <input type="text" id="cmdVelTopic" value="/diff_controller/cmd_vel">
                 </div>
             </div>
 
@@ -1191,8 +1191,8 @@
                     log('Connected', 'success');
                     document.getElementById('connModal').classList.remove('open');
                     subscribeTopics();
-                    // Advertise cmd_vel
-                    send({ op: 'advertise', topic: document.getElementById('cmdVelTopic').value, type: 'geometry_msgs/Twist' });
+                    // Advertise cmd_vel (TwistStamped)
+                    send({ op: 'advertise', topic: document.getElementById('cmdVelTopic').value, type: 'geometry_msgs/TwistStamped' });
                     // Probe which corebot services rosbridge sees
                     const _listId = 'list_' + Date.now();
                     send({ op: 'call_service', id: _listId, service: '/rosapi/services', args: {} });
@@ -1437,15 +1437,19 @@
         // ═══════════════════════════════════════════════
         function publishTwist(vx, wz) {
             const topic = document.getElementById('cmdVelTopic').value;
-            // Ensure advertised (idempotent in rosbridge)
+            // Ensure advertised as TwistStamped (idempotent in rosbridge)
             if (ros && ros.readyState === WebSocket.OPEN) {
-                ros.send(JSON.stringify({ op: 'advertise', topic: topic, type: 'geometry_msgs/Twist' }));
+                ros.send(JSON.stringify({ op: 'advertise', topic: topic, type: 'geometry_msgs/TwistStamped' }));
             }
+            const now = Date.now();
             send({
                 op: 'publish', topic,
                 msg: {
-                    linear: { x: vx, y: 0, z: 0 },
-                    angular: { x: 0, y: 0, z: wz }
+                    header: { stamp: { sec: Math.floor(now / 1000), nanosec: (now % 1000) * 1e6 }, frame_id: 'base_link' },
+                    twist: {
+                        linear: { x: vx, y: 0, z: 0 },
+                        angular: { x: 0, y: 0, z: wz }
+                    }
                 }
             });
             document.getElementById('tvx').textContent = vx.toFixed(2);

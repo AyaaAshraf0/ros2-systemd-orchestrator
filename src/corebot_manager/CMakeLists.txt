@@ -10,6 +10,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(corebot_interfaces REQUIRED)
+find_package(rclcpp_action REQUIRED)
 
 # Define the node executable
 add_executable(supervisor_node src/supervisor_node.cpp)
@@ -18,6 +19,7 @@ add_executable(supervisor_node src/supervisor_node.cpp)
 ament_target_dependencies(supervisor_node 
   rclcpp 
   corebot_interfaces
+  rclcpp_action
 )
 
 # Install the binary to the ROS 2 lib directory
